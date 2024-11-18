@@ -4,8 +4,8 @@ import time
 import math
 
 CELL_SIZE = 40 #px
-BOARD_SIZE = 8
-SEARCH_TIME = 1.5 #seconds   SHOULD BE HALF OF TIMELIMIT TO GIVE TIME FOR BACKTACKING
+BOARD_SIZE = 6
+SEARCH_TIME = 1.5 #seconds   SHOULD BE HALF OF TIMELIMIT TO GIVE TIME FOR BACKTRACKING
 DEPTH = 900 #to prevent max recursion depth (1000)
 row_labels = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P']
 col_labels = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]
@@ -26,11 +26,22 @@ chanceToTie = None
         #else:
             #print(gameBoard[row][col])
             
-def playHalma():
+def playHalma(playAgain):
     global turn
     global agentMsgID 
     global chanceToTie 
     chanceToTie = True
+
+    if playAgain: #reset globals
+        global pieces
+        global pieceSelected
+        global moveHistMarkers
+        moveHistMarkers = set()
+        pieceSelected = None
+        pieces = {}
+
+        if turn != 'W':
+            turn = 'W'
 
     uiWindow = tk.Tk()
 
@@ -40,9 +51,6 @@ def playHalma():
     gameBoard = createBoard(window)
     gameBoard = setPieces(window, gameBoard)
     agentMsgID = window.create_text(((BOARD_SIZE+2)*CELL_SIZE)/2, (BOARD_SIZE+1.5)*CELL_SIZE, text="Your Move", fill="black", font=('Helvetica 15'))
-
-    if turn != 'W':
-        turn = 'W'
 
     def handleClick(event):
         global pieceSelected
@@ -109,6 +117,7 @@ def createBoard(gui):
 def setPieces(gui, board):
     global blackGoals
     global whiteGoals
+    global pieces
 
     #draw black pieces
     for row in range(1,int(BOARD_SIZE/2)+1):
@@ -312,7 +321,7 @@ def displayWinner(uiWindow, window, won):
     def playAgain():
         gameOverAlert.destroy()
         uiWindow.destroy()  # Close the main window completely
-        playHalma()         # Restart the game
+        playHalma(playAgain=True)         # Restart the game
 
     if len(won) > 1:
         winnerMessage = "Tie!"
@@ -335,20 +344,19 @@ def displayWinner(uiWindow, window, won):
 def agentMove(board, window):
         endTime = time.time() + SEARCH_TIME
 
-        _, best_move = minimax(board, endTime, True, DEPTH)
+        _, best_move = minimax(board, endTime, True, DEPTH, pruning=True)  #with alphabeta pruning
 
         if best_move:
             movePiece(board, best_move[0], best_move[1], window)
 
-def minimax(board, endTime, isMaximizing, depth):
+def minimax(board, endTime, isMaximizing, depth, alpha=float('-inf'), beta=float('inf'), pruning=False):
     def simulateMove(boardCopy, location, moveTo):
         boardCopy[location[0]][location[1]] = 'E'
         boardCopy[moveTo[0]][moveTo[1]] = 'B'
-        
         return boardCopy
 
     if time.time() >= endTime or checkForEnd(board, None, None, True) or depth == 0:
-        return evaluateBoard(board), None
+        return evaluateBoard(board), None   
 
     bestMove = None
     if isMaximizing:
@@ -357,24 +365,32 @@ def minimax(board, endTime, isMaximizing, depth):
             for move in moves:
                 boardCopy = [row[:] for row in board]
                 newBoard = simulateMove(boardCopy, piece, move)
-                eval_score = minimax(newBoard, endTime, False, depth-1)[0]
+                eval_score = minimax(newBoard, endTime, False, depth-1, alpha, beta, pruning)[0]
                 if eval_score > maxEval:
                     maxEval = eval_score
                     bestMove = (piece, move)
+                if pruning:
+                    alpha = max(alpha, eval_score)
+                    if beta <= alpha:
+                        break
         return maxEval, bestMove
 
-    else: #is minimizing
+    else:  # Minimizing player
         minEval = float('inf')
-        for piece, moves in generateMoves(board, 'B').items():
+        for piece, moves in generateMoves(board, 'W').items():
             for move in moves:
                 boardCopy = [row[:] for row in board]
                 newBoard = simulateMove(boardCopy, piece, move)
-                eval_score = minimax(newBoard, endTime, True, depth-1)[0]
+                eval_score = minimax(newBoard, endTime, True, depth-1, alpha, beta, pruning)[0]
                 if eval_score < minEval:
                     minEval = eval_score
                     bestMove = (piece, move)
+                if pruning:
+                    beta = min(beta, eval_score)
+                    if beta <= alpha:
+                        break
+        return minEval, bestMove
 
-    return minEval, bestMove
 
 def generateMoves(board, color):
     moves = {}
@@ -401,10 +417,10 @@ def evaluateBoard(board):
                 for blackGoal in openBlackGoals:
                     black_distance += getHeuristic((row,col), blackGoal)
     
-    return white_distance - black_distance     #WHITE WANTS MAX BLACK WANTS MIN
+    return white_distance - black_distance     #WHITE WANTS MIN BLACK WANTS MAX
 
 
 def getHeuristic(piece, goal):
     return abs(piece[0] - goal[0]) + abs(piece[1] - goal[1])      
 
-playHalma()
+playHalma(playAgain=False)
