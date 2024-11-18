@@ -4,15 +4,20 @@ import time
 import math
 
 CELL_SIZE = 40 #px
-BOARD_SIZE = 10
-SEARCH_TIME = 2 #seconds
+BOARD_SIZE = 8
+SEARCH_TIME = 1.5 #seconds   SHOULD BE HALF OF TIMELIMIT TO GIVE TIME FOR BACKTACKING
+DEPTH = 900 #to prevent max recursion depth (1000)
 row_labels = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P']
 col_labels = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]
 pieces = {}
 possMoveMarkers = {}
-goalSquares = set()
+moveHistMarkers = set()
+blackGoals = set()
+whiteGoals = set()
 pieceSelected = None
 turn = 'W'
+agentMsgID = None
+chanceToTie = None
 
 #for row in range(BOARD_SIZE):
     #for col in range(BOARD_SIZE):
@@ -23,18 +28,25 @@ turn = 'W'
             
 def playHalma():
     global turn
+    global agentMsgID 
+    global chanceToTie 
+    chanceToTie = True
+
     uiWindow = tk.Tk()
 
-    window = tk.Canvas(uiWindow, width=(BOARD_SIZE+1)*CELL_SIZE, height=(BOARD_SIZE+1)*CELL_SIZE)
+    window = tk.Canvas(uiWindow, width=(BOARD_SIZE+2)*CELL_SIZE, height=(BOARD_SIZE+2)*CELL_SIZE)
     window.pack()
 
     gameBoard = createBoard(window)
     gameBoard = setPieces(window, gameBoard)
+    agentMsgID = window.create_text(((BOARD_SIZE+2)*CELL_SIZE)/2, (BOARD_SIZE+1.5)*CELL_SIZE, text="Your Move", fill="black", font=('Helvetica 15'))
+
     if turn != 'W':
         turn = 'W'
 
     def handleClick(event):
         global pieceSelected
+        global agentMsgID
 
         row = (event.y // CELL_SIZE) - 1
         col = (event.x // CELL_SIZE) - 1
@@ -52,10 +64,18 @@ def playHalma():
                 movePiece(gameBoard, pieceSelected, (row,col), window)
                 pieceSelected = None
                 clearMarkers(window)
-        
-        winner = checkForEnd(gameBoard)
-        if winner:
-            displayWinner(uiWindow, window, winner)
+
+                checkForEnd(gameBoard, uiWindow, window, False)
+
+                window.delete(agentMsgID)
+                agentMsgID = window.create_text(((BOARD_SIZE+2)*CELL_SIZE)/2, (BOARD_SIZE+1.5)*CELL_SIZE, text="Agent thinking...", fill="black", font=('Helvetica 15'))
+                uiWindow.update_idletasks() #force render before black move
+
+                agentMove(gameBoard, window)
+                window.delete(agentMsgID)
+                agentMsgID = window.create_text(((BOARD_SIZE+2)*CELL_SIZE)/2, (BOARD_SIZE+1.5)*CELL_SIZE, text="Your Move", fill="black", font=('Helvetica 15'))
+
+        checkForEnd(gameBoard, uiWindow, window, False)
     
     uiWindow.bind("<Button-1>", handleClick)
 
@@ -87,7 +107,8 @@ def createBoard(gui):
     return board
 
 def setPieces(gui, board):
-    global goalSquares
+    global blackGoals
+    global whiteGoals
 
     #draw black pieces
     for row in range(1,int(BOARD_SIZE/2)+1):
@@ -105,6 +126,8 @@ def setPieces(gui, board):
             #create piece
             pieceID = gui.create_oval(x1+(BOARD_SIZE/4), y1+(BOARD_SIZE/4), x2-(BOARD_SIZE/4), y2-(BOARD_SIZE/4), fill="black")
             pieces[(row-1,col-1)] = pieceID
+
+            whiteGoals.add((row-1,col-1))
     
     #draw white pieces
     for row in range(BOARD_SIZE,int(BOARD_SIZE/2),-1):
@@ -122,8 +145,8 @@ def setPieces(gui, board):
             #create piece
             pieceID = gui.create_oval(x1+(BOARD_SIZE/4), y1+(BOARD_SIZE/4), x2-(BOARD_SIZE/4), y2-(BOARD_SIZE/4), fill="white")
             pieces[(row-1,col-1)] = pieceID
-            #add to agents goal
-            goalSquares.add((row-1,col-1))
+            
+            blackGoals.add((row-1,col-1))
 
     return board
 
@@ -152,8 +175,6 @@ def setLegalMoves(gameBoard, pieceLocation, gui, visualize):
                     if jumpCoord not in legalMoves:
                         legalMoves.append(jumpCoord)
                     getJumps(jumpCoord, move, visited)
-
-        return
     
     def vizLegalMoves(movesList):
         global possMoveMarkers
@@ -212,12 +233,22 @@ def clearMarkers(gui):
 
 def movePiece(gameBoard, pieceLocation, moveToLocation, gui):
     global turn
+    global moveHistMarkers
+
     if turn == 'W':
         turn = 'B'
     else:
         turn = 'W'
     gui.delete(pieces.get(pieceLocation))
     del pieces[pieceLocation]
+    for marker in moveHistMarkers:
+        gui.delete(marker)
+
+    x1 = (pieceLocation[1]+1) * CELL_SIZE 
+    x2 = x1 + CELL_SIZE 
+    y1 = (pieceLocation[0]+1) * CELL_SIZE 
+    y2 = y1 + CELL_SIZE 
+    moveHistMarkers.add(gui.create_rectangle(x1, y1, x2, y2, fill="#336699"))
 
     #get color of piece
     pieceColor = gameBoard[pieceLocation[0]][pieceLocation[1]]
@@ -229,6 +260,9 @@ def movePiece(gameBoard, pieceLocation, moveToLocation, gui):
     x2 = x1 + CELL_SIZE 
     y1 = (moveToLocation[0]+1) * CELL_SIZE 
     y2 = y1 + CELL_SIZE 
+
+    moveHistMarkers.add(gui.create_rectangle(x1, y1, x2, y2, fill="#336699"))
+
     if pieceColor=='W':
         pieceID = gui.create_oval(x1+(BOARD_SIZE/4), y1+(BOARD_SIZE/4), x2-(BOARD_SIZE/4), y2-(BOARD_SIZE/4), fill="white")
     else:
@@ -236,16 +270,18 @@ def movePiece(gameBoard, pieceLocation, moveToLocation, gui):
     
     pieces[moveToLocation] = pieceID
 
-def checkForEnd(gameBoard):
+
+
+    return gameBoard
+
+def checkForEnd(gameBoard, ui, window, checkOnly):
+    global chanceToTie
     whiteWon = True
     blackWon = True
+    winner = []
 
-    goalSquaresBlack = goalSquares
-    goalSquaresWhite = set()
-    for row in range(1,int(BOARD_SIZE/2)+1):
-        numPiecesInRow = int(BOARD_SIZE/2) - (row-1)
-        for col in range(1,numPiecesInRow+1):
-            goalSquaresWhite.add((row-1,col-1))
+    goalSquaresBlack = blackGoals
+    goalSquaresWhite = whiteGoals
 
     for square in goalSquaresWhite:
         if gameBoard[square[0]][square[1]] != 'W':
@@ -256,61 +292,89 @@ def checkForEnd(gameBoard):
             blackWon = False
 
     if whiteWon:
-        return 'W'
-    elif blackWon:
-        return 'B'
-    
-    return False
+        winner.append('W')
+    if blackWon:
+        winner.append('B')
+
+    if checkOnly:
+        if 'W' in winner and chanceToTie:
+            chanceToTie = False
+            return False
+        else:
+            return True if len(winner) > 0 else False
+    else:
+        if whiteWon and not chanceToTie or blackWon:
+            displayWinner(ui, window, winner)
 
 def displayWinner(uiWindow, window, won):
     global turn
-    winner = 'White' if won == 'W' else 'Black'
-    
-    # Destroy the game board to clear it from the screen
-    window.destroy()
 
-    # Prevent further clicks on the board by unbinding the event
-    uiWindow.unbind("<Button-1>")
-
-    # Create and set up the game over alert window
-    alertDim = int(((BOARD_SIZE+1) * CELL_SIZE) / 2)  # Half the size of original window
-    gameOverAlert = Toplevel(uiWindow)
-    gameOverAlert.geometry(f"{alertDim}x{alertDim}")
-    gameOverAlert.title("Game Over")
-
-    # Display the winner message
-    Label(gameOverAlert, text=f"{winner} wins!", font=('Helvetica 20 bold')).pack(pady=20)
-
-    # Function to restart the game
     def playAgain():
         gameOverAlert.destroy()
         uiWindow.destroy()  # Close the main window completely
         playHalma()         # Restart the game
 
-    # Button to play again
+    if len(won) > 1:
+        winnerMessage = "Tie!"
+    else:
+        winnerMessage = 'White wins!' if 'W' in won else 'Black wins!'
+    
+    #window.destroy()
+
+    uiWindow.unbind("<Button-1>")
+
+    alertDim = int(((BOARD_SIZE+1) * CELL_SIZE) / 2)  # Half the size of original window
+    gameOverAlert = Toplevel(uiWindow)
+    gameOverAlert.geometry(f"{alertDim}x{alertDim}")
+    gameOverAlert.title("Game Over")
+
+    Label(gameOverAlert, text=winnerMessage, font=('Helvetica 20 bold')).pack(pady=20)
     Button(gameOverAlert, text="Play Again", font=('Helvetica 15'), command=playAgain).pack(pady=10)
 
 #RUNS FOR BLACK ONLY
-def minimax(board, depth):
+def agentMove(board, window):
+        endTime = time.time() + SEARCH_TIME
+
+        _, best_move = minimax(board, endTime, True, DEPTH)
+
+        if best_move:
+            movePiece(board, best_move[0], best_move[1], window)
+
+def minimax(board, endTime, isMaximizing, depth):
     def simulateMove(boardCopy, location, moveTo):
         boardCopy[location[0]][location[1]] = 'E'
         boardCopy[moveTo[0]][moveTo[1]] = 'B'
+        
+        return boardCopy
 
-    if depth == 0 or checkForEnd(board):
+    if time.time() >= endTime or checkForEnd(board, None, None, True) or depth == 0:
         return evaluateBoard(board), None
 
-    best_move = None
-    min_eval = float('inf')
-    for piece, moves in generateMoves(board, 'B').items():
-        for move in moves:
-            board_copy = [row[:] for row in board]
-            simulateMove(board_copy, piece, move)
-            eval_score = minimax(board_copy, depth - 1)[0]
-            if eval_score < min_eval:
-                min_eval = eval_score
-                best_move = (piece, move)
+    bestMove = None
+    if isMaximizing:
+        maxEval = float('-inf')
+        for piece, moves in generateMoves(board, 'B').items():
+            for move in moves:
+                boardCopy = [row[:] for row in board]
+                newBoard = simulateMove(boardCopy, piece, move)
+                eval_score = minimax(newBoard, endTime, False, depth-1)[0]
+                if eval_score > maxEval:
+                    maxEval = eval_score
+                    bestMove = (piece, move)
+        return maxEval, bestMove
 
-    return min_eval, best_move
+    else: #is minimizing
+        minEval = float('inf')
+        for piece, moves in generateMoves(board, 'B').items():
+            for move in moves:
+                boardCopy = [row[:] for row in board]
+                newBoard = simulateMove(boardCopy, piece, move)
+                eval_score = minimax(newBoard, endTime, True, depth-1)[0]
+                if eval_score < minEval:
+                    minEval = eval_score
+                    bestMove = (piece, move)
+
+    return minEval, bestMove
 
 def generateMoves(board, color):
     moves = {}
@@ -323,12 +387,24 @@ def generateMoves(board, color):
     return moves
 
 def evaluateBoard(board):
-    black_distance = sum(manhattanDist(piece, goal) for piece, goal in goalSquares if board[piece[0]][piece[1]] == 'B')
-    white_distance = sum(manhattanDist(piece, goal) for piece, goal in goalSquares if board[piece[0]][piece[1]] == 'W')
-    return white_distance - black_distance
+    black_distance = 0
+    white_distance = 0
+    openWhiteGoals = {goal for goal in whiteGoals if board[goal[0]][goal[1]] != 'W'}
+    openBlackGoals = {goal for goal in blackGoals if board[goal[0]][goal[1]] != 'B'}
+
+    for row in range(BOARD_SIZE):
+        for col in range(BOARD_SIZE):
+            if board[row][col] == 'W':
+                for whiteGoal in openWhiteGoals:
+                    white_distance += getHeuristic((row,col), whiteGoal)
+            elif board[row][col] == 'B':
+                for blackGoal in openBlackGoals:
+                    black_distance += getHeuristic((row,col), blackGoal)
+    
+    return white_distance - black_distance     #WHITE WANTS MAX BLACK WANTS MIN
 
 
-def manhattanDist(piece, goal):
+def getHeuristic(piece, goal):
     return abs(piece[0] - goal[0]) + abs(piece[1] - goal[1])      
 
 playHalma()
